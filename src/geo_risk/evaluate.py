@@ -204,3 +204,123 @@ def plot_actual_vs_predicted(
 
     logger.info(f"Saved actual vs predicted map to {output_path}")
     return output_path
+
+
+def plot_moran_scatter(
+    values: pd.Series | np.ndarray,
+    coords_or_geo: gpd.GeoDataFrame | pd.DataFrame | np.ndarray,
+    title: str = "Moran's I Spatial Autocorrelation Scatter Plot",
+    output_path: str | Path | None = None,
+) -> Path:
+    """Plot Moran scatter plot showing standardized value vs spatial lag.
+
+    Args:
+        values: Series or array of values across geographic regions.
+        coords_or_geo: Geographic geometries or coordinates.
+        title: Title for the scatter plot.
+        output_path: Output file path.
+
+    Returns:
+        Path to the saved figure.
+    """
+    from .spatial_cv import (
+        build_spatial_weight_matrix,
+        compute_global_morans_i,
+        extract_coordinates,
+    )
+
+    if output_path is None:
+        output_path = Path(settings.models_dir) / "moran_scatter.png"
+    else:
+        output_path = Path(output_path)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    x = np.asarray(values, dtype=float)
+    coords = extract_coordinates(coords_or_geo)
+    w = build_spatial_weight_matrix(coords, weight_type="inverse_distance", row_standardize=True)
+
+    z = (x - np.mean(x)) / (np.std(x) if np.std(x) > 0 else 1.0)
+    wz = w @ z
+
+    moran = compute_global_morans_i(x, coords)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.scatter(z, wz, color="#2980b9", alpha=0.8, edgecolors="k", s=60)
+
+    # Linear fit line with slope = Moran's I
+    slope, intercept = np.polyfit(z, wz, 1)
+    x_vals = np.linspace(min(z), max(z), 100)
+    ax.plot(x_vals, slope * x_vals + intercept, color="#e74c3c", linestyle="--", linewidth=2,
+            label=f"Slope (Moran's I) = {moran.i_stat:.3f} (p={moran.p_value:.3f})")
+
+    ax.axhline(0, color="gray", linestyle=":", alpha=0.6)
+    ax.axvline(0, color="gray", linestyle=":", alpha=0.6)
+
+    ax.set_title(title, fontsize=12, fontweight="bold")
+    ax.set_xlabel("Standardized Value (z)", fontsize=10)
+    ax.set_ylabel("Spatial Lag (Wz)", fontsize=10)
+    ax.legend(loc="upper left")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    logger.info(f"Saved Moran scatter plot to {output_path}")
+    return output_path
+
+
+def plot_lisa_clusters(
+    nuts_gdf: gpd.GeoDataFrame,
+    values: pd.Series | np.ndarray,
+    title: str = "Local Indicators of Spatial Association (LISA)",
+    output_path: str | Path | None = None,
+) -> Path:
+    """Plot Local Moran's I (LISA) spatial clusters on geographic map.
+
+    Args:
+        nuts_gdf: GeoDataFrame with region geometries.
+        values: Series or array of regional flood risk exposure.
+        title: Title of map.
+        output_path: Filepath to save plot.
+
+    Returns:
+        Path to saved figure.
+    """
+    from .spatial_cv import compute_local_morans_i
+
+    if output_path is None:
+        output_path = Path(settings.models_dir) / "lisa_clusters.png"
+    else:
+        output_path = Path(output_path)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lisa = compute_local_morans_i(values, nuts_gdf)
+
+    gdf = nuts_gdf.copy()
+    gdf["quadrant"] = lisa.quadrants
+
+    color_map = {
+        "HH": "#e74c3c",  # Hotspot (High-High)
+        "LL": "#3498db",  # Coldspot (Low-Low)
+        "HL": "#e67e22",  # Spatial outlier
+        "LH": "#9b59b6",  # Spatial outlier
+    }
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    for quad, color in color_map.items():
+        subset = gdf[gdf["quadrant"] == quad]
+        if not subset.empty:
+            subset.plot(ax=ax, color=color, edgecolor="black", linewidth=0.5, label=quad)
+
+    ax.set_title(title, fontsize=12, fontweight="bold")
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.legend(title="LISA Cluster", loc="upper right")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    logger.info(f"Saved LISA cluster map to {output_path}")
+    return output_path
+
